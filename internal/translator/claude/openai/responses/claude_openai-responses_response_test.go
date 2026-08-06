@@ -1050,6 +1050,29 @@ func TestConvertClaudeResponseToOpenAIResponses_CustomToolEmptyInputMatchesNonSt
 	}
 }
 
+func TestConvertClaudeResponseToOpenAIResponsesNonStream_NativeClaudeJSON(t *testing.T) {
+	raw := []byte(`{"id":"msg_native","type":"message","role":"assistant","model":"claude-sonnet-4.5","content":[{"type":"text","text":"81"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":8,"output_tokens":1}}`)
+	request := []byte(`{"model":"claude-sonnet-4.5","input":"Calculate 9 * 9."}`)
+
+	out := ConvertClaudeResponseToOpenAIResponsesNonStream(context.Background(), "", request, nil, raw, nil)
+	root := gjson.ParseBytes(out)
+	if got := root.Get("id").String(); got != "msg_native" {
+		t.Fatalf("id = %q, want msg_native", got)
+	}
+	if got := root.Get("output.0.content.0.text").String(); got != "81" {
+		t.Fatalf("output text = %q, want 81", got)
+	}
+	if got := root.Get("usage.input_tokens").Int(); got != 8 {
+		t.Fatalf("input_tokens = %d, want 8", got)
+	}
+	if got := root.Get("usage.output_tokens").Int(); got != 1 {
+		t.Fatalf("output_tokens = %d, want 1", got)
+	}
+	if got := root.Get("usage.total_tokens").Int(); got != 9 {
+		t.Fatalf("total_tokens = %d, want 9", got)
+	}
+}
+
 func TestConvertClaudeResponseToOpenAIResponses_RestoresNamespaceFunctionCall(t *testing.T) {
 	originalRequest := []byte(`{
 		"model":"gpt-test",
