@@ -10,6 +10,25 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
+func TestConvertOpenAIResponsesRequestToClaude_StringInput(t *testing.T) {
+	inputJSON := []byte(`{"model":"claude-sonnet-4.5","input":"Calculate 9 * 9.","max_output_tokens":64}`)
+
+	result := ConvertOpenAIResponsesRequestToClaude("claude-sonnet-4.5", inputJSON, false)
+	root := gjson.ParseBytes(result)
+	if got := root.Get("messages.#").Int(); got != 1 {
+		t.Fatalf("messages count = %d, want 1: %s", got, result)
+	}
+	if got := root.Get("messages.0.role").String(); got != "user" {
+		t.Fatalf("role = %q, want user", got)
+	}
+	if got := root.Get("messages.0.content").String(); got != "Calculate 9 * 9." {
+		t.Fatalf("content = %q, want prompt", got)
+	}
+	if got := root.Get("max_tokens").Int(); got != 64 {
+		t.Fatalf("max_tokens = %d, want 64", got)
+	}
+}
+
 func TestConvertOpenAIResponsesRequestToClaude_SanitizesToolCallIDsForClaude(t *testing.T) {
 	inputJSON := `{
 		"model": "gpt-4.1",
