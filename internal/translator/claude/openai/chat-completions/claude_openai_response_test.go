@@ -130,3 +130,25 @@ func TestConvertClaudeResponseToOpenAINonStream_UsageMergesMessageStartUsage(t *
 	}
 	assertCachedCreationTokens(t, out, 31)
 }
+
+func TestConvertClaudeResponseToOpenAINonStream_NativeClaudeJSON(t *testing.T) {
+	rawJSON := []byte(`{"id":"msg_native","type":"message","role":"assistant","model":"claude-sonnet-4.5","content":[{"type":"text","text":"437"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":9,"output_tokens":1}}`)
+
+	out := ConvertClaudeResponseToOpenAINonStream(context.Background(), "", nil, nil, rawJSON, nil)
+	root := gjson.ParseBytes(out)
+	if got := root.Get("id").String(); got != "msg_native" {
+		t.Fatalf("id = %q, want msg_native", got)
+	}
+	if got := root.Get("model").String(); got != "claude-sonnet-4.5" {
+		t.Fatalf("model = %q, want claude-sonnet-4.5", got)
+	}
+	if got := root.Get("choices.0.message.content").String(); got != "437" {
+		t.Fatalf("content = %q, want 437", got)
+	}
+	if got := root.Get("usage.prompt_tokens").Int(); got != 9 {
+		t.Fatalf("prompt_tokens = %d, want 9", got)
+	}
+	if got := root.Get("usage.completion_tokens").Int(); got != 1 {
+		t.Fatalf("completion_tokens = %d, want 1", got)
+	}
+}

@@ -716,6 +716,7 @@ func ConvertClaudeResponseToOpenAIResponses(ctx context.Context, modelName strin
 
 // ConvertClaudeResponseToOpenAIResponsesNonStream aggregates Claude SSE into a single OpenAI Responses JSON.
 func ConvertClaudeResponseToOpenAIResponsesNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) []byte {
+	rawJSON = translatorcommon.ClaudeNonStreamToSSE(rawJSON)
 	// Aggregate Claude SSE lines into a single OpenAI Responses JSON (non-stream)
 	// We follow the same aggregation logic as the streaming variant but produce
 	// one final object matching docs/out.json structure.
