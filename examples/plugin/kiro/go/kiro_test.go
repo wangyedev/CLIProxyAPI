@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"hash/crc32"
 	"net/http"
 	"net/url"
@@ -53,6 +54,23 @@ func TestDecodeCredentialRejectsHostInjectionRegion(t *testing.T) {
 	_, handled, errCredential := decodeCredential([]byte(`{"type":"kiro","api_key_env":"KEY","region":"us-east-1.kiro.dev.evil"}`))
 	if !handled || errCredential == nil {
 		t.Fatalf("decodeCredential() handled=%v error=%v", handled, errCredential)
+	}
+}
+
+func TestMissingEnvironmentAPIKeyIsAuthenticationFailure(t *testing.T) {
+	t.Setenv("KIRO_MISSING_TEST_KEY", "")
+	_, errKey := resolveAPIKey(kiroCredential{APIKeyEnv: "KIRO_MISSING_TEST_KEY"})
+	if !errors.Is(errKey, errKiroAPIKeyUnavailable) {
+		t.Fatalf("resolveAPIKey() error = %v, want API-key unavailable", errKey)
+	}
+
+	raw := prepareRequestErrorEnvelope(errKey)
+	var env envelope
+	if errUnmarshal := json.Unmarshal(raw, &env); errUnmarshal != nil {
+		t.Fatal(errUnmarshal)
+	}
+	if env.Error == nil || env.Error.Code != "invalid_auth" || env.Error.HTTPStatus != http.StatusUnauthorized {
+		t.Fatalf("prepare error envelope = %#v, want invalid_auth/401", env.Error)
 	}
 }
 
@@ -360,6 +378,62 @@ func TestClaudeToKiroPreservesExplicitZeroSamplingValues(t *testing.T) {
 	}
 }
 
+func TestClaudeToKiroRejectsUnsupportedGenerationControls(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "stop sequences",
+			body: `{"model":"claude-sonnet-4.5","messages":[{"role":"user","content":"hello"}],"stop_sequences":["END"]}`,
+			want: "stop_sequences",
+		},
+		{
+			name: "forced tool",
+			body: `{"model":"claude-sonnet-4.5","messages":[{"role":"user","content":"hello"}],"tool_choice":{"type":"tool","name":"lookup"}}`,
+			want: "automatic tool choice",
+		},
+		{
+			name: "disabled parallel tools",
+			body: `{"model":"claude-sonnet-4.5","messages":[{"role":"user","content":"hello"}],"tool_choice":{"type":"auto","disable_parallel_tool_use":true}}`,
+			want: "parallel-tool restrictions",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, errTranslate := claudeToKiro([]byte(test.body), "")
+			if errTranslate == nil || !strings.Contains(errTranslate.Error(), test.want) {
+				t.Fatalf("claudeToKiro() error = %v, want %q", errTranslate, test.want)
+			}
+		})
+	}
+}
+
+func TestClaudeToKiroRejectsURLBackedImages(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "user image",
+			body: `{"model":"claude-sonnet-4.5","messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.com/image.png"}}]}]}`,
+		},
+		{
+			name: "tool result image",
+			body: `{"model":"claude-sonnet-4.5","messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"image","source":{"type":"url","url":"https://example.com/tool.png"}}]}]}]}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, errTranslate := claudeToKiro([]byte(test.body), "")
+			if errTranslate == nil || !strings.Contains(errTranslate.Error(), "URL-backed image") {
+				t.Fatalf("claudeToKiro() error = %v, want URL-backed image error", errTranslate)
+			}
+		})
+	}
+}
+
 func TestClaudeToKiroPreservesThinkingBudget(t *testing.T) {
 	payload, _, errTranslate := claudeToKiro([]byte(`{
 		"model":"claude-sonnet-4-5",
@@ -473,6 +547,23 @@ func TestNormalizeKiroModelDoesNotRewriteDatedSnapshotAsDecimal(t *testing.T) {
 	}
 	if got := normalizeKiroModel("claude-haiku-4-5"); got != "claude-haiku-4.5" {
 		t.Fatalf("normalizeKiroModel() = %q", got)
+	}
+}
+
+func TestContextWindowTokensDistinguishesDatedSnapshots(t *testing.T) {
+	tests := []struct {
+		model string
+		want  int
+	}{
+		{model: "claude-opus-4-20250514", want: 200_000},
+		{model: "claude-sonnet-4.6", want: 1_000_000},
+		{model: "claude-opus-5", want: 1_000_000},
+	}
+
+	for _, test := range tests {
+		if got := contextWindowTokens(test.model); got != test.want {
+			t.Errorf("contextWindowTokens(%q) = %d, want %d", test.model, got, test.want)
+		}
 	}
 }
 
@@ -610,6 +701,13 @@ func TestAccumulatorOmitsUnsignedReasoningAndMergesTextFragments(t *testing.T) {
 	if accumulator.Blocks[0].Type != "text" || accumulator.Blocks[0].Text != "Hello world." {
 		t.Fatalf("merged content blocks = %#v", accumulator.Blocks)
 	}
+	if errFinish := accumulator.finish(); errFinish != nil {
+		t.Fatal(errFinish)
+	}
+	visibleTokens := estimateClaudeOutputTokens(accumulator.Blocks)
+	if accumulator.OutputTokens <= visibleTokens {
+		t.Fatalf("output tokens = %d, want hidden reasoning included beyond %d visible tokens", accumulator.OutputTokens, visibleTokens)
+	}
 }
 
 func TestAccumulatorEstimatesUsageWhenUpstreamOmitsTokens(t *testing.T) {
@@ -657,6 +755,16 @@ func TestUpdateUsageReadsNestedCacheBuckets(t *testing.T) {
 	inputTokens, outputTokens := updateUsage(event, 0, 0)
 	if inputTokens != 12 || outputTokens != 2 {
 		t.Fatalf("usage = input:%d output:%d, want input:12 output:2", inputTokens, outputTokens)
+	}
+}
+
+func TestUpdateUsageIgnoresNestedToolInputUsage(t *testing.T) {
+	event := map[string]any{"input": map[string]any{"usage": map[string]any{
+		"inputTokens": 100000.0, "outputTokens": 100000.0,
+	}}}
+	inputTokens, outputTokens := updateUsage(event, 12, 2)
+	if inputTokens != 12 || outputTokens != 2 {
+		t.Fatalf("usage = input:%d output:%d, want existing provider counts", inputTokens, outputTokens)
 	}
 }
 

@@ -336,11 +336,11 @@ func marshalRPCError(code, message string) []byte {
 	return raw
 }
 
-func (a *rpcPluginAdapter) openHostCallbackContext(ctx context.Context) (string, func()) {
+func (a *rpcPluginAdapter) openHostCallbackContext(ctx context.Context, httpClients ...pluginapi.HostHTTPClient) (string, func()) {
 	if a == nil || a.host == nil {
 		return "", func() {}
 	}
-	return a.host.openCallbackContextForPlugin(ctx, a.id)
+	return a.host.openCallbackContextForPlugin(ctx, a.id, httpClients...)
 }
 
 func (a *rpcPluginAdapter) RegisterModels(ctx context.Context, req pluginapi.ModelRegistrationRequest) (pluginapi.ModelRegistrationResponse, error) {
@@ -352,7 +352,7 @@ func (a *rpcPluginAdapter) StaticModels(ctx context.Context, req pluginapi.Stati
 }
 
 func (a *rpcPluginAdapter) ModelsForAuth(ctx context.Context, req pluginapi.AuthModelRequest) (pluginapi.ModelResponse, error) {
-	callbackID, closeCallback := a.openHostCallbackContext(ctx)
+	callbackID, closeCallback := a.openHostCallbackContext(ctx, req.HTTPClient)
 	defer closeCallback()
 	return callPlugin[pluginapi.ModelResponse](ctx, a.client, pluginabi.MethodModelForAuth, rpcAuthModelRequest{
 		AuthModelRequest: req,
@@ -433,7 +433,7 @@ func (a *rpcPluginAdapter) Authenticate(ctx context.Context, req pluginapi.Front
 }
 
 func (a *rpcPluginAdapter) Execute(ctx context.Context, req pluginapi.ExecutorRequest) (pluginapi.ExecutorResponse, error) {
-	callbackID, closeCallback := a.openHostCallbackContext(ctx)
+	callbackID, closeCallback := a.openHostCallbackContext(ctx, req.HTTPClient)
 	defer closeCallback()
 	return callPlugin[pluginapi.ExecutorResponse](ctx, a.client, pluginabi.MethodExecutorExecute, rpcExecutorRequest{
 		ExecutorRequest: req,
@@ -451,7 +451,7 @@ func (a *rpcPluginAdapter) CountTokens(ctx context.Context, req pluginapi.Execut
 }
 
 func (a *rpcPluginAdapter) HttpRequest(ctx context.Context, req pluginapi.ExecutorHTTPRequest) (pluginapi.ExecutorHTTPResponse, error) {
-	callbackID, closeCallback := a.openHostCallbackContext(ctx)
+	callbackID, closeCallback := a.openHostCallbackContext(ctx, req.HTTPClient)
 	defer closeCallback()
 	return callPlugin[pluginapi.ExecutorHTTPResponse](ctx, a.client, pluginabi.MethodExecutorHTTPRequest, rpcExecutorHTTPRequest{
 		ExecutorHTTPRequest: req,
